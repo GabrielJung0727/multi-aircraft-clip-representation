@@ -61,6 +61,7 @@ class PlanesNetDataset(Dataset):
         transform: Optional[Callable] = None,
         include_scenes: bool = False,
         metadata_file: Optional[str | Path] = None,
+        indices: Optional[Sequence[int]] = None,
     ) -> None:
         self.root = Path(root)
         self.transform = transform
@@ -72,7 +73,10 @@ class PlanesNetDataset(Dataset):
             )
 
         metadata_path = Path(metadata_file) if metadata_file else self.root / "planesnet.json"
-        self.samples: List[PlanesNetSample] = self._build_samples(metadata_path, split)
+        samples = self._build_samples(metadata_path, split)
+        if indices is not None:
+            samples = [samples[i] for i in indices]
+        self.samples: List[PlanesNetSample] = samples
 
     # --------------------------------------------------------------------- #
     # Internal helpers
