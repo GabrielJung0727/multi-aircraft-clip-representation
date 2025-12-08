@@ -29,7 +29,7 @@ from datasets.fgvc_dataset import FGVCAircraftDataset
 from datasets.hrplanes_dataset import HRPlanesDataset
 from datasets.planesnet_dataset import PlanesNetDataset
 from models.classifier_heads import LinearClassifier
-from models.clip_backbones import CLIPBackbone, DiTBackbone
+from models.clip_backbones import BackboneConfig, CLIPBackbone, DiTBackbone
 from models.unet_decoder import UNetDecoder
 
 
@@ -170,15 +170,17 @@ def rotation_oriented_cit(
 class MultiTaskAircraftModel(torch.nn.Module):
     def __init__(self, num_fgvc_classes: int, backbone_cfg: Optional[BackboneConfig] = None) -> None:
         super().__init__()
-        self.backbone = CLIPBackbone(config=backbone_cfg)
-        self.dit = DiTBackbone()
+        cfg = backbone_cfg or BackboneConfig()
+        self.backbone = CLIPBackbone(config=cfg)
+        self.embed_dim = cfg.embed_dim
+        self.dit = DiTBackbone(embed_dim=self.embed_dim)
         encoder_channels = tuple(self.backbone.stage_channels[::-1])
         self.seg_decoder = UNetDecoder(encoder_channels=encoder_channels, num_classes=1)
         self.classifiers = torch.nn.ModuleDict(
             {
-                "planesnet": LinearClassifier(num_classes=2),
-                "fgvc": LinearClassifier(num_classes=num_fgvc_classes, hidden_dim=512),
-                "hrplanes": LinearClassifier(num_classes=2),
+                "planesnet": LinearClassifier(in_dim=self.embed_dim, num_classes=2),
+                "fgvc": LinearClassifier(in_dim=self.embed_dim, num_classes=num_fgvc_classes, hidden_dim=512),
+                "hrplanes": LinearClassifier(in_dim=self.embed_dim, num_classes=2),
             }
         )
 
@@ -254,7 +256,8 @@ def train():
     text_device = torch.device(args.text_device)
 
     train_loaders, val_loaders, class_map = prepare_dataloaders(args)
-    model = MultiTaskAircraftModel(num_fgvc_classes=len(class_map)).to(vision_device)
+    backbone_cfg = BackboneConfig(embed_dim=768)
+    model = MultiTaskAircraftModel(num_fgvc_classes=len(class_map), backbone_cfg=backbone_cfg).to(vision_device)
 
     criterion_cls = torch.nn.CrossEntropyLoss()
     criterion_seg = torch.nn.BCEWithLogitsLoss()
