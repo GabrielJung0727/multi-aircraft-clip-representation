@@ -31,12 +31,13 @@ def dummy_encoder_features(shape: Tuple[int, int, int], batch_size: int = 2) -> 
         torch.randn(batch_size, c, h, w),
         torch.randn(batch_size, c // 2, h * 2, w * 2),
         torch.randn(batch_size, c // 4, h * 4, w * 4),
+        torch.randn(batch_size, c // 8, h * 8, w * 8),
     )
 
 
 def main() -> None:
     args = parse_args()
-    decoder = UNetDecoder(num_classes=1).to(args.device)
+    decoder = UNetDecoder(encoder_channels=(512, 256, 128, 64), num_classes=1).to(args.device)
     optimizer = torch.optim.Adam(decoder.parameters(), lr=1e-3)
     criterion = torch.nn.BCEWithLogitsLoss()
 

@@ -29,23 +29,19 @@ class ConvBlock(nn.Module):
 class UNetDecoder(nn.Module):
     """Tiny U-Net decoder that expects encoder feature maps as tuples."""
 
-    def __init__(self, num_classes: int = 1) -> None:
+    def __init__(self, encoder_channels: Tuple[int, ...], num_classes: int = 1) -> None:
         super().__init__()
-        self.up_blocks = nn.ModuleList(
-            [
-                nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2),
-                nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2),
-                nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2),
-            ]
-        )
-        self.conv_blocks = nn.ModuleList(
-            [
-                ConvBlock(512, 256),
-                ConvBlock(256, 128),
-                ConvBlock(128, 64),
-            ]
-        )
-        self.head = nn.Conv2d(64, num_classes, kernel_size=1)
+        if len(encoder_channels) < 2:
+            raise ValueError("encoder_channels must include bottleneck + skip connections")
+
+        self.up_blocks = nn.ModuleList()
+        self.conv_blocks = nn.ModuleList()
+        in_channels = encoder_channels[0]
+        for skip_channels in encoder_channels[1:]:
+            self.up_blocks.append(nn.ConvTranspose2d(in_channels, skip_channels, kernel_size=2, stride=2))
+            self.conv_blocks.append(ConvBlock(skip_channels * 2, skip_channels))
+            in_channels = skip_channels
+        self.head = nn.Conv2d(in_channels, num_classes, kernel_size=1)
 
     def forward(self, encoder_features: Tuple[torch.Tensor, ...]) -> torch.Tensor:
         x = encoder_features[0]

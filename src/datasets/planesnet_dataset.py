@@ -160,7 +160,10 @@ class PlanesNetDataset(Dataset):
         image = Image.open(sample.path).convert("RGB")
         if self.transform:
             image = self.transform(image)
-        return image, sample.label, sample.meta
+        meta = dict(sample.meta)
+        meta.setdefault("dataset", "planesnet")
+        meta["text_label"] = "satellite tile with an airplane" if sample.label else "satellite tile without an airplane"
+        return image, sample.label, meta
 
     def __repr__(self) -> str:
         return f"PlanesNetDataset(num_samples={len(self)}, root='{self.root}', dir='{self.images_dir.name}')"

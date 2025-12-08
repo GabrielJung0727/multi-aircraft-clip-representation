@@ -9,7 +9,7 @@ of the codebase can import consistent entrypoints.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import torch
 from torch import nn
@@ -46,6 +46,7 @@ class CLIPBackbone(nn.Module):
         super().__init__()
         cfg = config or BackboneConfig()
 
+        self.cfg = cfg
         self.stem = nn.Sequential(
             nn.Conv2d(3, cfg.width, kernel_size=7, stride=2, padding=3, bias=False),
             nn.BatchNorm2d(cfg.width),
@@ -67,7 +68,8 @@ class CLIPBackbone(nn.Module):
             )
             channels = next_channels
 
-        self.stages = nn.Sequential(*stages)
+        self.stage_channels = [cfg.width] + [cfg.width * (2 ** i) for i in range(1, cfg.depth)]
+        self.stages = nn.ModuleList(stages)
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.proj = nn.Linear(channels, cfg.embed_dim)
 
@@ -77,11 +79,18 @@ class CLIPBackbone(nn.Module):
             for param in self.proj.parameters():
                 param.requires_grad = True
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward_features(self, x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[torch.Tensor, ...]]:
         feats = self.stem(x)
-        feats = self.stages(feats)
-        feats = self.avg_pool(feats).flatten(1)
-        return self.proj(feats)
+        pyramid: List[torch.Tensor] = []
+        for stage in self.stages:
+            feats = stage(feats)
+            pyramid.append(feats)
+        pooled = self.avg_pool(feats).flatten(1)
+        return pooled, tuple(pyramid[::-1])  # deepest first for decoder convenience
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        pooled, _ = self.forward_features(x)
+        return self.proj(pooled)
 
 
 class DiTBackbone(nn.Module):
