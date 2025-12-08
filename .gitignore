@@ -56,7 +56,7 @@ data/
 # =====================================
 # 결과물(플롯 이미지 등) – 필요 시만 커밋
 # =====================================
-results/
+results/*
 !results/.gitkeep
 !results/README.md
 !results/logs/
