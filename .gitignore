@@ -33,7 +33,6 @@ dist/
 # =====================================
 *.log
 logs/
-results/logs/
 
 # =====================================
 # Data (원본 데이터셋은 Git 밖에서 관리)
@@ -60,6 +59,10 @@ data/
 results/
 !results/.gitkeep
 !results/README.md
+!results/logs/
+!results/logs/**
+!results/plots/
+!results/plots/**
 
 # =====================================
 # 기타 도구

@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import matplotlib.pyplot as plt
+import numpy as np
+import seaborn as sns
 from torchvision import transforms
 
 from datasets.planesnet_dataset import PlanesNetDataset
@@ -107,6 +109,68 @@ def plot_validation_summary(history: List[Dict]) -> None:
     plt.close(fig)
 
 
+def boxplot_training_loss(history: List[Dict]) -> None:
+    datasets = list(history[0]["train"].keys())
+    data = [[record["train"][dataset]["total_loss"] for record in history] for dataset in datasets]
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.boxplot(data, labels=[ds.upper() for ds in datasets])
+    ax.set_title("Training loss distribution (boxplot)")
+    ax.set_ylabel("Total loss")
+    ax.grid(axis="y", linestyle="--", alpha=0.4)
+    fig.tight_layout()
+    fig.savefig(PLOT_DIR / "boxplot_training_loss.png", dpi=200)
+    plt.close(fig)
+
+
+def heatmap_validation_correlation(history: List[Dict]) -> None:
+    datasets = list(history[0]["val"].keys())
+    matrix = []
+    for dataset in datasets:
+        matrix.append([record["val"][dataset]["accuracy"] for record in history])
+    corr = np.corrcoef(matrix)
+    fig, ax = plt.subplots(figsize=(6, 5))
+    sns.heatmap(corr, annot=True, cmap="coolwarm", xticklabels=datasets, yticklabels=datasets, ax=ax)
+    ax.set_title("Validation accuracy correlation heatmap")
+    fig.tight_layout()
+    fig.savefig(PLOT_DIR / "heatmap_validation_correlation.png", dpi=200)
+    plt.close(fig)
+
+
+def scatter_train_vs_val(history: List[Dict]) -> None:
+    fig, ax = plt.subplots(figsize=(6, 5))
+    markers = ["o", "s", "^", "D", "P", "*"]
+    for idx, dataset in enumerate(history[0]["train"].keys()):
+        train_acc = [record["train"][dataset]["accuracy"] for record in history]
+        val_acc = [record["val"][dataset]["accuracy"] for record in history]
+        points = min(len(train_acc), len(val_acc))
+        ax.scatter(train_acc[:points], val_acc[:points], alpha=0.7, marker=markers[idx % len(markers)], label=dataset.upper())
+    ax.set_xlabel("Train accuracy")
+    ax.set_ylabel("Validation accuracy")
+    ax.set_title("Train vs Validation accuracy (scatter)")
+    ax.grid(True, linestyle="--", alpha=0.4)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(PLOT_DIR / "scatter_train_vs_val.png", dpi=200)
+    plt.close(fig)
+
+
+def histogram_clip_loss(history: List[Dict]) -> None:
+    losses = defaultdict(list)
+    for record in history:
+        for dataset, metrics in record["train"].items():
+            losses[dataset].append(metrics["clip_loss"])
+    fig, ax = plt.subplots(figsize=(7, 4))
+    for dataset, values in losses.items():
+        ax.hist(values, bins=10, alpha=0.5, label=dataset.upper())
+    ax.set_title("Clip loss histogram")
+    ax.set_xlabel("Clip loss")
+    ax.set_ylabel("Frequency")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(PLOT_DIR / "histogram_clip_loss.png", dpi=200)
+    plt.close(fig)
+
+
 def main() -> None:
     args = parse_args()
     ensure_dirs()
@@ -119,6 +183,10 @@ def main() -> None:
     if history:
         plot_accuracy_curves(history)
         plot_validation_summary(history)
+        boxplot_training_loss(history)
+        heatmap_validation_correlation(history)
+        scatter_train_vs_val(history)
+        histogram_clip_loss(history)
         print(f"Generated plots from log with {len(history)} epochs.")
     else:
         print("No training logs found; generated dataset plot only.")
