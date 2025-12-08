@@ -306,6 +306,7 @@ def train():
                 seg_loss_value = torch.tensor(0.0, device=vision_device)
                 if dataset_name == "hrplanes" and mask_tensor is not None:
                     seg_logits = model.seg_decoder(pyramid[: len(model.seg_decoder.up_blocks) + 1])
+                    seg_logits = F.interpolate(seg_logits, size=mask_tensor.shape[-2:], mode="bilinear", align_corners=False)
                     seg_loss_value = criterion_seg(seg_logits, mask_tensor)
 
                 text_meta = meta["text_label"]
@@ -392,6 +393,7 @@ def evaluate(
 
             if dataset_name == "hrplanes" and mask_tensor is not None:
                 seg_logits = model.seg_decoder(pyramid[: len(model.seg_decoder.up_blocks) + 1])
+                seg_logits = F.interpolate(seg_logits, size=mask_tensor.shape[-2:], mode="bilinear", align_corners=False)
                 seg_loss_total += criterion_seg(seg_logits, mask_tensor).item()
 
         results[dataset_name] = {

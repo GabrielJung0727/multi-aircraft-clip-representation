@@ -112,7 +112,6 @@ class HRPlanesDataset(Dataset):
         meta: Dict[str, object] = {
             "path": str(sample.path),
             "dataset": "hrplanes",
-            "boxes": sample.boxes,
             "split": self.split,
             "text_label": "high-resolution aerial imagery with aircraft" if sample.label else "aerial background scene",
         }
