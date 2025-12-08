@@ -186,7 +186,8 @@ class MultiTaskAircraftModel(torch.nn.Module):
 
     def encode(self, images: torch.Tensor) -> Tuple[torch.Tensor, Tuple[torch.Tensor, ...]]:
         pooled, pyramid = self.backbone.forward_features(images)
-        tokens = pooled.unsqueeze(-1).unsqueeze(-1)
+        projected = self.backbone.proj(pooled)
+        tokens = projected.unsqueeze(-1).unsqueeze(-1)
         refined = self.dit(tokens)
         return refined, pyramid
 
