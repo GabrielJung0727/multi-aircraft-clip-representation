@@ -34,7 +34,7 @@
 - **Rotation-oriented Continuous Image Translation** 기법으로 회전 불변성을 강화하며,
 - **U-Net 전이 학습, DiT(Vision Transformer 기반 Diffusion Transformer), BERT 텍스트 인코더**를 결합한 여러 모델 구성을 비교한다.
 
-최종적으로는 각 모델의 성능과 특성을 ***여섯 가지 그래프(Boxplot, Heatmap, Line plot, Scatter plot, Histogram, Bar plot)***로 시각화한다.
+> 최종적으로는 각 모델의 성능과 특성을 여섯 가지 그래프(Boxplot, Heatmap, Line plot, Scatter plot, Histogram, Bar plot)로 시각화한다.
 
 ---
 
