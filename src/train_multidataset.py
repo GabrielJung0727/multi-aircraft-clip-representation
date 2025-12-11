@@ -2,7 +2,8 @@
 Unified training script that mixes PlanesNet, HRPlanes, and FGVC Aircraft.
 
 It combines CLIP-style contrastive learning (image/text), Ro-CIT augmentation,
-U-Net auxiliary segmentation, DiT refinement, and BERT text prompts.
+U-Net auxiliary segmentation, DiT refinement, and an in-house hashing text encoder
+instead of any off-the-shelf pretrained model.
 """
 
 from __future__ import annotations
@@ -23,11 +24,12 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms import functional as TF
-from transformers import AutoModel, AutoTokenizer
+from models.text_encoder import HashingTextEncoder
 
 from datasets.fgvc_dataset import FGVCAircraftDataset
 from datasets.hrplanes_dataset import HRPlanesDataset
 from datasets.planesnet_dataset import PlanesNetDataset
+from datasets.seg7_dataset import Seg7Dataset
 from models.classifier_heads import LinearClassifier
 from models.clip_backbones import BackboneConfig, CLIPBackbone, DiTBackbone
 from models.unet_decoder import UNetDecoder
@@ -42,6 +44,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--planesnet-dir", type=Path, default=Path("data/planesnet"))
     parser.add_argument("--hrplanes-dir", type=Path, default=Path("data/hrplanes"))
     parser.add_argument("--fgvc-dir", type=Path, default=Path("data/fgvc_aircraft"))
+    parser.add_argument("--seg7-dir", type=Path, default=Path("data/data2/Seg-7"))
+    parser.add_argument("--seg7-csv", type=Path, default=Path("data/csv_file/train/Seg-4.csv"))
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--num-workers", type=int, default=4)
@@ -56,7 +60,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-dir", type=Path, default=Path("results/logs"))
     parser.add_argument("--max-angle", type=float, default=35.0)
     parser.add_argument("--experiment-name", type=str, default="multidataset")
-    parser.add_argument("--bert-model", type=str, default="bert-base-uncased")
+    parser.add_argument("--text-vocab-size", type=int, default=8192)
+    parser.add_argument("--text-embed-dim", type=int, default=768, help="Text embedding dim (also used for image projection).")
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
 
@@ -100,33 +105,16 @@ def build_classic_transforms(image_size: int) -> Tuple[transforms.Compose, trans
 
 
 class TextPromptEncoder:
-    """Caches BERT embeddings for textual prompts."""
+    """Self-contained text encoder (hashing tokenizer + lightweight transformer)."""
 
-    def __init__(self, model_name: str, device: torch.device, target_device: torch.device) -> None:
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name).to(device)
-        self.model.eval()
-        self.device = device
+    def __init__(self, vocab_size: int, embed_dim: int, device: torch.device, target_device: torch.device) -> None:
+        self.encoder = HashingTextEncoder(vocab_size=vocab_size, embed_dim=embed_dim, device=device)
         self.target_device = target_device
-        self.cache: Dict[str, torch.Tensor] = {}
 
     @torch.no_grad()
     def encode(self, texts: Sequence[str]) -> torch.Tensor:
-        uncached = [text for text in texts if text not in self.cache]
-        if uncached:
-            inputs = self.tokenizer(
-                uncached,
-                padding=True,
-                truncation=True,
-                return_tensors="pt",
-            ).to(self.device)
-            outputs = self.model(**inputs)
-            cls_embeddings = outputs.last_hidden_state[:, 0].cpu()
-            for text, emb in zip(uncached, cls_embeddings):
-                self.cache[text] = emb
-
-        stacked = torch.stack([self.cache[text] for text in texts]).to(self.target_device)
-        return stacked
+        embeddings = self.encoder.encode(list(texts)).to(self.target_device)
+        return embeddings
 
 
 def rotation_oriented_cit(
@@ -181,6 +169,7 @@ class MultiTaskAircraftModel(torch.nn.Module):
                 "planesnet": LinearClassifier(in_dim=self.embed_dim, num_classes=2),
                 "fgvc": LinearClassifier(in_dim=self.embed_dim, num_classes=num_fgvc_classes, hidden_dim=512),
                 "hrplanes": LinearClassifier(in_dim=self.embed_dim, num_classes=2),
+                "seg7": LinearClassifier(in_dim=self.embed_dim, num_classes=2),
             }
         )
 
@@ -231,10 +220,16 @@ def prepare_dataloaders(
     fgvc_train = FGVCAircraftDataset(root=args.fgvc_dir, subset="train", transform=train_transform, class_to_idx=class_map)
     fgvc_val = FGVCAircraftDataset(root=args.fgvc_dir, subset="val", transform=val_transform, class_to_idx=class_map)
 
+    seg7_full = Seg7Dataset(csv_path=args.seg7_csv, image_root=args.seg7_dir, transform=train_transform)
+    seg7_train_idx, seg7_val_idx = split_indices(len(seg7_full), args.val_fraction, args.seed + 2)
+    seg7_train = Seg7Dataset(csv_path=args.seg7_csv, image_root=args.seg7_dir, transform=train_transform, indices=seg7_train_idx, split="train")
+    seg7_val = Seg7Dataset(csv_path=args.seg7_csv, image_root=args.seg7_dir, transform=val_transform, indices=seg7_val_idx, split="val")
+
     datasets = {
         "planesnet": (planes_train, planes_val),
         "hrplanes": (hrplanes_train, hrplanes_val),
         "fgvc": (fgvc_train, fgvc_val),
+        "seg7": (seg7_train, seg7_val),
     }
 
     train_loaders = {
@@ -257,13 +252,18 @@ def train():
     text_device = torch.device(args.text_device)
 
     train_loaders, val_loaders, class_map = prepare_dataloaders(args)
-    backbone_cfg = BackboneConfig(embed_dim=768)
+    backbone_cfg = BackboneConfig(embed_dim=args.text_embed_dim)
     model = MultiTaskAircraftModel(num_fgvc_classes=len(class_map), backbone_cfg=backbone_cfg).to(vision_device)
 
     criterion_cls = torch.nn.CrossEntropyLoss()
     criterion_seg = torch.nn.BCEWithLogitsLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    text_encoder = TextPromptEncoder(args.bert_model, device=text_device, target_device=vision_device)
+    text_encoder = TextPromptEncoder(
+        vocab_size=args.text_vocab_size,
+        embed_dim=backbone_cfg.embed_dim,
+        device=text_device,
+        target_device=vision_device,
+    )
 
     args.log_dir.mkdir(parents=True, exist_ok=True)
     log_path = args.log_dir / f"{args.experiment_name}_{int(time.time())}.json"

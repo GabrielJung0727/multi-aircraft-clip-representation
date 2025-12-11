@@ -21,22 +21,72 @@ class BackboneConfig:
     freeze_encoder: bool = False
     width: int = 64
     depth: int = 4
+    drop_path_rate: float = 0.1
+    use_se: bool = True
+    attn_heads: int = 8
+
+
+def drop_path(x: torch.Tensor, drop_prob: float, training: bool) -> torch.Tensor:
+    """Stochastic depth per sample."""
+    if drop_prob == 0.0 or not training:
+        return x
+    keep_prob = 1 - drop_prob
+    shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+    random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+    random_tensor.floor_()
+    return x.div(keep_prob) * random_tensor
+
+
+class DropPath(nn.Module):
+    def __init__(self, drop_prob: float = 0.0) -> None:
+        super().__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore[override]
+        return drop_path(x, self.drop_prob, self.training)
+
+
+class SqueezeExcite(nn.Module):
+    def __init__(self, channels: int, reduction: int = 4) -> None:
+        super().__init__()
+        hidden = max(channels // reduction, 8)
+        self.net = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, hidden, 1),
+            nn.GELU(),
+            nn.Conv2d(hidden, channels, 1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        scale = self.net(x)
+        return x * scale
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, channels: int) -> None:
+    def __init__(self, channels: int, drop_prob: float = 0.0, use_se: bool = True) -> None:
         super().__init__()
-        self.block = nn.Sequential(
-            nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(channels),
-            nn.GELU(),
-            nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(channels),
-        )
-        self.act = nn.GELU()
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.act1 = nn.GELU()
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False, groups=channels)
+        self.pointwise = nn.Conv2d(channels, channels, kernel_size=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(channels)
+        self.se = SqueezeExcite(channels) if use_se else nn.Identity()
+        self.drop_path = DropPath(drop_prob)
+        self.act2 = nn.GELU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.act(self.block(x) + x)
+        residual = x
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.act1(x)
+        x = self.conv2(x)
+        x = self.pointwise(x)
+        x = self.bn2(x)
+        x = self.se(x)
+        x = self.drop_path(x) + residual
+        return self.act2(x)
 
 
 class CLIPBackbone(nn.Module):
@@ -58,12 +108,13 @@ class CLIPBackbone(nn.Module):
         channels = cfg.width
         for stage_idx in range(cfg.depth):
             next_channels = channels * 2 if stage_idx > 0 else channels
+            drop_prob = cfg.drop_path_rate * (stage_idx + 1) / max(cfg.depth, 1)
             stages.append(
                 nn.Sequential(
                     nn.Conv2d(channels, next_channels, kernel_size=3, stride=2, padding=1, bias=False),
                     nn.BatchNorm2d(next_channels),
                     nn.GELU(),
-                    ResidualBlock(next_channels),
+                    ResidualBlock(next_channels, drop_prob=drop_prob, use_se=cfg.use_se),
                 )
             )
             channels = next_channels
@@ -94,19 +145,60 @@ class CLIPBackbone(nn.Module):
 
 
 class DiTBackbone(nn.Module):
-    """Placeholder for a Diffusion Transformer style encoder."""
+    """Lightweight transformer refinement over pooled tokens (DiT-style)."""
 
-    def __init__(self, embed_dim: int = 512, depth: int = 4) -> None:
+    def __init__(self, embed_dim: int = 512, depth: int = 4, num_heads: int = 8, mlp_ratio: float = 4.0, drop_path_rate: float = 0.1) -> None:
         super().__init__()
-        self.pos_embedding = nn.Parameter(torch.zeros(1, embed_dim))
-        self.layers = nn.ModuleList([nn.Linear(embed_dim, embed_dim) for _ in range(depth)])
+        self.embed_dim = embed_dim
+        self.depth = depth
+        self.num_heads = num_heads
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, 1024 + 1, embed_dim))  # supports up to 32x32 tokens
+
+        layers: List[nn.Module] = []
+        for idx in range(depth):
+            drop_prob = drop_path_rate * (idx + 1) / max(depth, 1)
+            layers.append(
+                TransformerBlock(embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, drop_path=drop_prob)
+            )
+        self.layers = nn.ModuleList(layers)
+        self.norm = nn.LayerNorm(embed_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out = x.mean(dim=(2, 3))
-        out = out + self.pos_embedding
-        for layer in self.layers:
-            out = torch.tanh(layer(out))
-        return out
+        # x: (B, C, H, W) -> tokens
+        b, c, h, w = x.shape
+        tokens = x.flatten(2).transpose(1, 2)  # (B, HW, C)
+        cls = self.cls_token.expand(b, -1, -1)
+        tokens = torch.cat([cls, tokens], dim=1)
+        max_pos = min(tokens.size(1), self.pos_embed.size(1))
+        tokens = tokens + self.pos_embed[:, :max_pos, :]
+
+        for blk in self.layers:
+            tokens = blk(tokens)
+        tokens = self.norm(tokens)
+        cls_out = tokens[:, 0]
+        return cls_out
+
+
+class TransformerBlock(nn.Module):
+    def __init__(self, embed_dim: int, num_heads: int = 8, mlp_ratio: float = 4.0, drop: float = 0.0, attn_drop: float = 0.0, drop_path: float = 0.0) -> None:
+        super().__init__()
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=attn_drop, batch_first=True)
+        self.drop_path = DropPath(drop_path)
+        self.norm2 = nn.LayerNorm(embed_dim)
+        hidden = int(embed_dim * mlp_ratio)
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, embed_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore[override]
+        attn_out, _ = self.attn(self.norm1(x), self.norm1(x), self.norm1(x), need_weights=False)
+        x = x + self.drop_path(attn_out)
+        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        return x
 
 
 __all__ = ["CLIPBackbone", "DiTBackbone", "BackboneConfig"]

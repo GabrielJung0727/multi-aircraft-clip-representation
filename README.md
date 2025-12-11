@@ -186,6 +186,16 @@
     비행기 기종명, 설명 문장, 데이터셋별 context 텍스트 임베딩을 제공
   - CLIP 구조에서 텍스트 측 임베딩 품질이 성능에 미치는 영향을 분석
 
+### 5.5 기술 향상 포인트 (ROI, CLIP, CNN, U-Net 전이, DiT, BERT)
+
+- **ROI 최적화**: 단순 정확도 개선뿐 아니라 `추가 가치(정확도↑) - 추가 비용(연산/서빙)`을 계산하여 모델 선택. 고정비 대비 GPU/CPU 시간, 배치 크기, 양자화(8/4-bit) 옵션을 비교.
+- **CLIP 강화**: 텍스트 프롬프트 엔지니어링(도메인 서술 템플릿 5~10개 앙상블), 이미지 측 rotation/색상 증강, temperature 학습, projector fine-tune로 제로샷 성능 및 전이 성능 동시 개선.
+- **CNN 기준선 개선**: SE/CBAM 채널 어텐션 삽입, mixed precision + cosine LR 스케줄, label smoothing을 적용해 작은 모델도 견고하게 유지.
+- **U-Net 전이 학습**: CLIP/DiT encoder를 동결하거나 상위 블록만 미세조정한 하이브리드 U-Net으로 보조 segmentation 학습 → detection/분류 피쳐 품질 향상(멀티태스킹 regularization).
+- **DiT 세부 튜닝**: patch size 16/32 비교, 시간 스텝을 줄인 경량 DiT 변형, gradient checkpointing/flash attention으로 메모리 절감 후 더 깊은 스택 실험.
+- **BERT 측면**: 도메인 용어 추가 vocab(airport/aircraft taxonomy)와 prompt prefix(“satellite view of…”)로 텍스트 임베딩을 정제, CLS pooling과 mean pooling 비교로 downstream 분류 성능 검증.
+- **평가/모니터링**: PlanesNet/HRPlanes/FGVC/RSICD/RSITMD, RemoteCLIP 공개 수치와 자체 CNN/CNIP 실험을 동일 메트릭(Acc/F1/latency)과 비용 기준으로 표준화해 ROI 대시보드에 반영.
+
 ---
 
 ## 6. 실험 설정

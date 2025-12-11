@@ -1,5 +1,14 @@
 from .classifier_heads import LinearClassifier
 from .clip_backbones import CLIPBackbone, DiTBackbone, BackboneConfig
+from .text_encoder import HashingTextEncoder, SimpleTextEncoder
 from .unet_decoder import UNetDecoder
 
-__all__ = ["LinearClassifier", "CLIPBackbone", "DiTBackbone", "BackboneConfig", "UNetDecoder"]
+__all__ = [
+    "LinearClassifier",
+    "CLIPBackbone",
+    "DiTBackbone",
+    "BackboneConfig",
+    "UNetDecoder",
+    "HashingTextEncoder",
+    "SimpleTextEncoder",
+]
