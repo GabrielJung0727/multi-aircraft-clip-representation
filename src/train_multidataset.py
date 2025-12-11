@@ -30,6 +30,7 @@ from datasets.fgvc_dataset import FGVCAircraftDataset
 from datasets.hrplanes_dataset import HRPlanesDataset
 from datasets.planesnet_dataset import PlanesNetDataset
 from datasets.seg7_dataset import Seg7Dataset
+from datasets.det10_dataset import Det10Dataset
 from models.classifier_heads import LinearClassifier
 from models.clip_backbones import BackboneConfig, CLIPBackbone, DiTBackbone
 from models.unet_decoder import UNetDecoder
@@ -46,6 +47,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fgvc-dir", type=Path, default=Path("data/fgvc_aircraft"))
     parser.add_argument("--seg7-dir", type=Path, default=Path("data/data2/Seg-7"))
     parser.add_argument("--seg7-csv", type=Path, default=Path("data/csv_file/train/Seg-4.csv"))
+    parser.add_argument("--det10-dir", type=Path, default=Path("data/data2/Det-10_part1"))
+    parser.add_argument("--det10-csv", type=Path, default=Path("data/csv_file/train/Det-10.csv"))
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--num-workers", type=int, default=4)
@@ -170,6 +173,7 @@ class MultiTaskAircraftModel(torch.nn.Module):
                 "fgvc": LinearClassifier(in_dim=self.embed_dim, num_classes=num_fgvc_classes, hidden_dim=512),
                 "hrplanes": LinearClassifier(in_dim=self.embed_dim, num_classes=2),
                 "seg7": LinearClassifier(in_dim=self.embed_dim, num_classes=2),
+                "det10": LinearClassifier(in_dim=self.embed_dim, num_classes=2),
             }
         )
 
@@ -225,11 +229,17 @@ def prepare_dataloaders(
     seg7_train = Seg7Dataset(csv_path=args.seg7_csv, image_root=args.seg7_dir, transform=train_transform, indices=seg7_train_idx, split="train")
     seg7_val = Seg7Dataset(csv_path=args.seg7_csv, image_root=args.seg7_dir, transform=val_transform, indices=seg7_val_idx, split="val")
 
+    det10_full = Det10Dataset(csv_path=args.det10_csv, image_root=args.det10_dir, transform=train_transform)
+    det10_train_idx, det10_val_idx = split_indices(len(det10_full), args.val_fraction, args.seed + 3)
+    det10_train = Det10Dataset(csv_path=args.det10_csv, image_root=args.det10_dir, transform=train_transform, indices=det10_train_idx, split="train")
+    det10_val = Det10Dataset(csv_path=args.det10_csv, image_root=args.det10_dir, transform=val_transform, indices=det10_val_idx, split="val")
+
     datasets = {
         "planesnet": (planes_train, planes_val),
         "hrplanes": (hrplanes_train, hrplanes_val),
         "fgvc": (fgvc_train, fgvc_val),
         "seg7": (seg7_train, seg7_val),
+        "det10": (det10_train, det10_val),
     }
 
     train_loaders = {
