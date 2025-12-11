@@ -15,6 +15,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 from PIL import Image
+import torch
 from torch.utils.data import Dataset
 
 
@@ -54,9 +55,13 @@ class Seg7Dataset(Dataset):
         if self.transform:
             image = self.transform(image)
 
+        # Provide a dummy mask so collate works uniformly across datasets.
+        h, w = image.shape[-2], image.shape[-1]
+        mask_tensor = torch.zeros((1, h, w), dtype=torch.float32)
+
         text_label = self.titles[idx]
         label = self._infer_label(text_label)
-        meta: Dict[str, object] = {"text_label": text_label, "mask": None}
+        meta: Dict[str, object] = {"text_label": text_label, "mask": mask_tensor}
         return image, label, meta
 
 
