@@ -8,6 +8,7 @@ from typing import Tuple
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 
 class ConvBlock(nn.Module):
@@ -48,6 +49,8 @@ class UNetDecoder(nn.Module):
         skips = encoder_features[1:]
         for up, conv, skip in zip(self.up_blocks, self.conv_blocks, skips):
             x = up(x)
+            if skip.shape[-2:] != x.shape[-2:]:
+                skip = F.interpolate(skip, size=x.shape[-2:], mode="bilinear", align_corners=False)
             x = torch.cat([x, skip], dim=1)
             x = conv(x)
         return self.head(x)

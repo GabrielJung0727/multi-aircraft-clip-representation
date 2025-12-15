@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import torch
 import torch.nn.functional as F
+from PIL import Image
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from torch.utils.data import DataLoader
@@ -38,6 +39,7 @@ from models.unet_decoder import UNetDecoder
 
 CLIP_MEAN = (0.48145466, 0.4578275, 0.40821073)
 CLIP_STD = (0.26862954, 0.26130258, 0.27577711)
+Image.MAX_IMAGE_PIXELS = None  # disable PIL decompression bomb guard for large remote-sensing tiles
 
 
 def parse_args() -> argparse.Namespace:
@@ -54,6 +56,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--vision-device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--text-device", type=str, default="cpu")
+    parser.add_argument("--image-size", type=int, default=224, help="Square resize/crop for all datasets.")
     parser.add_argument("--val-fraction", type=float, default=0.1)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
@@ -65,6 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--experiment-name", type=str, default="multidataset")
     parser.add_argument("--text-vocab-size", type=int, default=8192)
     parser.add_argument("--text-embed-dim", type=int, default=768, help="Text embedding dim (also used for image projection).")
+    parser.add_argument("--backbone-width", type=int, default=64, help="Base channel width for the CNN stem.")
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
 
@@ -197,7 +201,7 @@ def prepare_dataloaders(
     args: argparse.Namespace,
 ) -> Tuple[Dict[str, DataLoader], Dict[str, DataLoader], Dict[str, int]]:
     set_seed(args.seed)
-    train_transform, val_transform = build_classic_transforms(256)
+    train_transform, val_transform = build_classic_transforms(args.image_size)
 
     planes_full = PlanesNetDataset(root=args.planesnet_dir, transform=train_transform)
     planes_train_idx, planes_val_idx = split_indices(len(planes_full), args.val_fraction, args.seed)
@@ -206,10 +210,10 @@ def prepare_dataloaders(
 
     hrplanes_full = HRPlanesDataset(
         root=args.hrplanes_dir,
-        image_size=256,
+        image_size=args.image_size,
         transform=transforms.Compose(
             [
-                transforms.Resize((256, 256)),
+                transforms.Resize((args.image_size, args.image_size)),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=CLIP_MEAN, std=CLIP_STD),
             ]
@@ -262,7 +266,7 @@ def train():
     text_device = torch.device(args.text_device)
 
     train_loaders, val_loaders, class_map = prepare_dataloaders(args)
-    backbone_cfg = BackboneConfig(embed_dim=args.text_embed_dim)
+    backbone_cfg = BackboneConfig(embed_dim=args.text_embed_dim, width=args.backbone_width)
     model = MultiTaskAircraftModel(num_fgvc_classes=len(class_map), backbone_cfg=backbone_cfg).to(vision_device)
 
     criterion_cls = torch.nn.CrossEntropyLoss()
